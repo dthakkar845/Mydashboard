@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Home Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Dashboard">
+<style>
+  :root { --bg:#0b0f14; --card:#141b24; --text:#f2f5f8; --dim:#8a97a6; --accent:#6cc4ff; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; background:var(--bg); color:var(--text);
+    font-family:-apple-system, "Helvetica Neue", Arial, sans-serif; overflow:hidden; }
+  #app { height:100%; display:flex; flex-direction:column; padding:3vmin; gap:3vmin; }
+  #top { display:flex; align-items:flex-end; justify-content:space-between; }
+  #clock { font-size:19vmin; font-weight:200; letter-spacing:-0.02em; line-height:1; }
+  #ampm { font-size:5vmin; color:var(--dim); margin-left:1.5vmin; font-weight:300; }
+  #date { text-align:right; font-size:4.2vmin; color:var(--dim); line-height:1.3; }
+  #date b { display:block; color:var(--text); font-size:5.4vmin; font-weight:400; }
+  #cities { flex:1; display:flex; gap:3vmin; min-height:0; }
+  .city { flex:1; background:var(--card); border-radius:3vmin; padding:3vmin;
+    display:flex; flex-direction:column; min-width:0; }
+  .name { font-size:3.4vmin; color:var(--accent); letter-spacing:.08em; text-transform:uppercase; }
+  .now { display:flex; align-items:center; gap:3vmin; margin:1.5vmin 0 2vmin; }
+  .icon { font-size:13vmin; line-height:1; }
+  .temp { font-size:14vmin; font-weight:200; line-height:1; }
+  .desc { font-size:3.6vmin; color:var(--dim); margin-top:1vmin; }
+  .days { display:flex; justify-content:space-between; margin-top:auto; gap:1vmin; }
+  .day { flex:1; text-align:center; font-size:3vmin; color:var(--dim); }
+  .day .di { font-size:5.5vmin; margin:.6vmin 0; }
+  .day .hi { color:var(--text); font-size:3.4vmin; }
+  #status { font-size:2.4vmin; color:#4d5968; text-align:right; }
+  #dim { position:fixed; left:0; top:0; right:0; bottom:0; background:#000; opacity:0; pointer-events:none; }
+  @media (orientation:portrait) {
+    #cities { flex-direction:column; }
+    #clock { font-size:17vmin; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <div><span id="clock">--:--</span><span id="ampm"></span></div>
+    <div id="date"><b id="dow"></b><span id="dmy"></span></div>
+  </div>
+  <div id="cities"></div>
+  <div id="status"></div>
+</div>
+<div id="dim"></div>
+
+<script>
+// ===== SETTINGS (edit these) =====
+var LOCATIONS = [
+  { name: "Wesley Chapel, FL", lat: 28.2397, lon: -82.3279 },
+  { name: "New City, NY",      lat: 41.1476, lon: -73.9893 }
+];
+var TIMEZONE = "America/New_York";
+var REFRESH_MINUTES = 20;
+var NIGHT_START = 22;   // 10 PM: screen dims
+var NIGHT_END = 6;      // 6 AM: back to normal
+var NIGHT_DIM = 0.75;   // 0 = no dimming, 1 = black
+// =================================
+
+var WX = {
+  0:["☀️","Clear"],1:["🌤️","Mostly clear"],2:["⛅","Partly cloudy"],3:["☁️","Overcast"],
+  45:["🌫️","Fog"],48:["🌫️","Fog"],51:["🌦️","Light drizzle"],53:["🌦️","Drizzle"],55:["🌦️","Heavy drizzle"],
+  61:["🌧️","Light rain"],63:["🌧️","Rain"],65:["🌧️","Heavy rain"],66:["🌧️","Freezing rain"],67:["🌧️","Freezing rain"],
+  71:["🌨️","Light snow"],73:["🌨️","Snow"],75:["❄️","Heavy snow"],77:["🌨️","Snow grains"],
+  80:["🌦️","Showers"],81:["🌧️","Showers"],82:["⛈️","Heavy showers"],
+  85:["🌨️","Snow showers"],86:["❄️","Snow showers"],95:["⛈️","Thunderstorm"],96:["⛈️","Thunderstorm, hail"],99:["⛈️","Thunderstorm, hail"]
+};
+function wx(code) { return WX[code] || ["❔","—"]; }
+
+var DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+var SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+var MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+function tzNow() {
+  // Current time in TIMEZONE, independent of the iPad's own zone setting
+  try {
+    var p = new Intl.DateTimeFormat("en-US", { timeZone: TIMEZONE, hour12:false,
+      year:"numeric", month:"numeric", day:"numeric", hour:"numeric", minute:"numeric", weekday:"long" })
+      .formatToParts(new Date());
+    var o = {}; p.forEach(function(x){ o[x.type] = x.value; });
+    return { h: parseInt(o.hour,10) % 24, m: parseInt(o.minute,10), dow: o.weekday,
+             d: parseInt(o.day,10), mo: parseInt(o.month,10)-1, y: o.year };
+  } catch (e) {
+    var n = new Date();
+    return { h:n.getHours(), m:n.getMinutes(), dow:DAYS[n.getDay()], d:n.getDate(), mo:n.getMonth(), y:n.getFullYear() };
+  }
+}
+
+function pad(n) { return n < 10 ? "0" + n : "" + n; }
+
+function tick() {
+  var t = tzNow();
+  var h12 = t.h % 12 === 0 ? 12 : t.h % 12;
+  document.getElementById("clock").textContent = h12 + ":" + pad(t.m);
+  document.getElementById("ampm").textContent = t.h < 12 ? "AM" : "PM";
+  document.getElementById("dow").textContent = t.dow;
+  document.getElementById("dmy").textContent = MONTHS[t.mo] + " " + t.d + ", " + t.y;
+  var night = (NIGHT_START > NIGHT_END) ? (t.h >= NIGHT_START || t.h < NIGHT_END)
+                                         : (t.h >= NIGHT_START && t.h < NIGHT_END);
+  document.getElementById("dim").style.opacity = night ? NIGHT_DIM : 0;
+}
+
+function buildCards() {
+  var box = document.getElementById("cities");
+  box.innerHTML = "";
+  LOCATIONS.forEach(function (loc, i) {
+    var c = document.createElement("div");
+    c.className = "city"; c.id = "city" + i;
+    c.innerHTML = '<div class="name">' + loc.name + '</div>' +
+      '<div class="now"><div class="icon">…</div><div><div class="temp">--°</div><div class="desc">Loading…</div></div></div>' +
+      '<div class="days"></div>';
+    box.appendChild(c);
+  });
+}
+
+function render(i, data) {
+  var c = document.getElementById("city" + i);
+  if (!c || !data || !data.current) return;
+  var cur = data.current, w = wx(cur.weather_code);
+  c.querySelector(".icon").textContent = w[0];
+  c.querySelector(".temp").textContent = Math.round(cur.temperature_2m) + "°";
+  c.querySelector(".desc").textContent = w[1] + " · feels " + Math.round(cur.apparent_temperature) +
+    "° · wind " + Math.round(cur.wind_speed_10m) + " mph";
+  var html = "";
+  var dl = data.daily;
+  for (var k = 1; k < dl.time.length && k <= 4; k++) {
+    var dt = new Date(dl.time[k] + "T12:00:00");
+    html += '<div class="day">' + SHORT[dt.getDay()] +
+      '<div class="di">' + wx(dl.weather_code[k])[0] + '</div>' +
+      '<div class="hi">' + Math.round(dl.temperature_2m_max[k]) + '°</div>' +
+      '<div>' + Math.round(dl.temperature_2m_min[k]) + '°</div>' +
+      '<div>' + (dl.precipitation_probability_max[k] || 0) + '%</div></div>';
+  }
+  c.querySelector(".days").innerHTML = html;
+}
+
+function loadOne(i) {
+  var loc = LOCATIONS[i];
+  var url = "https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon +
+    "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m" +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
+    "&temperature_unit=fahrenheit&wind_speed_unit=mph&forecast_days=5&timezone=" + encodeURIComponent(TIMEZONE);
+  return fetch(url).then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function (data) {
+    try { localStorage.setItem("wx" + i, JSON.stringify(data)); } catch (e) {}
+    render(i, data);
+  });
+}
+
+function loadAll() {
+  var done = 0, failed = false;
+  LOCATIONS.forEach(function (loc, i) {
+    loadOne(i).then(function () {
+      done++;
+      if (done === LOCATIONS.length && !failed) {
+        var t = tzNow();
+        document.getElementById("status").textContent =
+          "Weather updated " + ((t.h % 12) || 12) + ":" + pad(t.m) + (t.h < 12 ? " AM" : " PM");
+      }
+    }).catch(function () {
+      failed = true;
+      try { var s = localStorage.getItem("wx" + i); if (s) render(i, JSON.parse(s)); } catch (e) {}
+      document.getElementById("status").textContent = "Weather offline, showing last saved data. Retrying soon.";
+    });
+  });
+}
+
+buildCards();
+LOCATIONS.forEach(function (l, i) {
+  try { var s = localStorage.getItem("wx" + i); if (s) render(i, JSON.parse(s)); } catch (e) {}
+});
+tick();
+setInterval(tick, 1000);
+loadAll();
+setInterval(loadAll, REFRESH_MINUTES * 60 * 1000);
+</script>
+</body>
+</html>
